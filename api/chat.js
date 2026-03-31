@@ -1,7 +1,8 @@
 export default async function handler(req, res) {
-  // --- ABILITA I PERMESSI PER LE APP ESTERNE (CORS) ---
+
+  // --- CORS ---
   res.setHeader('Access-Control-Allow-Credentials', true);
-  res.setHeader('Access-Control-Allow-Origin', '*'); // Permette chiamate da qualsiasi sito
+  res.setHeader('Access-Control-Allow-Origin', '*');
   res.setHeader('Access-Control-Allow-Methods', 'GET,OPTIONS,PATCH,DELETE,POST,PUT');
   res.setHeader('Access-Control-Allow-Headers', 'X-CSRF-Token, X-Requested-With, Accept, Accept-Version, Content-Length, Content-MD5, Content-Type, Date, X-Api-Version');
 
@@ -10,70 +11,59 @@ export default async function handler(req, res) {
     return;
   }
 
-  // --- LOGICA GEMINI ---
+  // --- PARAMETRI ---
   const { domanda, dati } = req.body;
   const API_KEY = process.env.GEMINI_API_KEY;
 
-  const inputUtente = domanda || "Ciao";
+  if (!API_KEY) {
+    res.status(500).json({ risposta: '❌ Chiave API Gemini non configurata nel server.' });
+    return;
+  }
+
+  const inputUtente = domanda || 'Ciao';
   let promptFinale = inputUtente;
 
   if (dati && (dati.archivio || dati.gruppi)) {
-    promptFinale = `DATI: ${JSON.stringify(dati)}. DOMANDA: ${inputUtente}`;
+    promptFinale = `Dati Congregazione: ${JSON.stringify(dati)}. Domanda: ${inputUtente}`;
   }
 
   try {
     const response = await fetch(
-      `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent?key=${API_KEY}`,
+      `https://generativelanguage.googleapis.com/v1beta/models/gemini-1.5-flash:generateContent?key=${API_KEY}`,
       {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
           contents: [{ parts: [{ text: promptFinale }] }]
         })
       }
     );
 
-    const result = await response.json();
-    
-    if (result.candidates && result.candidates[0].content) {
+    // Leggi sempre come testo prima, per evitare crash se Gemini risponde con HTML
+    const rawText = await response.text();
+
+    if (!response.ok) {
+      let errMsg = `Errore API Gemini: status ${response.status}`;
+      try {
+        const errJson = JSON.parse(rawText);
+        errMsg += ` - ${errJson.error?.message || rawText}`;
+      } catch (_) {
+        errMsg += ` - ${rawText.substring(0, 200)}`;
+      }
+      res.status(500).json({ risposta: `❌ ${errMsg}` });
+      return;
+    }
+
+    const result = JSON.parse(rawText);
+
+    if (result.candidates && result.candidates[0]?.content?.parts?.[0]?.text) {
       const testo = result.candidates[0].content.parts[0].text;
       res.status(200).json({ risposta: testo });
     } else {
-      res.status(500).json({ risposta: "Errore nella risposta di Gemini." });
-    }
-  } catch (error) {
-    res.status(500).json({ risposta: "Errore di connessione al server." });
-  }
-}
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          contents: [{ 
-            parts: [{ text: promptFinale }] 
-          }],
-          generationConfig: {
-            temperature: 0.7,
-            maxOutputTokens: 2000,
-          }
-        })
-      }
-    );
-
-    const data = await response.json();
-
-    // 5. Estrazione della risposta e invio all'app
-    if (data.candidates && data.candidates[0].content) {
-      const testoProdotto = data.candidates[0].content.parts[0].text;
-      
-      // Rispondiamo con il campo "risposta", così il tuo HTML attuale funziona subito
-      res.status(200).json({ risposta: testoProdotto });
-    } else {
-      console.error("Errore Gemini:", data);
-      res.status(500).json({ risposta: "Gemini non ha potuto generare una risposta. Verifica i limiti di quota." });
+      res.status(500).json({ risposta: '❌ Risposta Gemini vuota o in formato inatteso.' });
     }
 
   } catch (error) {
-    console.error("Errore Server:", error);
-    res.status(500).json({ risposta: "Errore interno del server durante la richiesta." });
+    res.status(500).json({ risposta: '❌ Errore di connessione: ' + error.message });
   }
 }
