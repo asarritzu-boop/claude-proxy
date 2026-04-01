@@ -1,18 +1,13 @@
 export default async function handler(req, res) {
 
-  // --- CORS ---
   res.setHeader('Access-Control-Allow-Credentials', true);
   res.setHeader('Access-Control-Allow-Origin', '*');
   res.setHeader('Access-Control-Allow-Methods', 'GET,OPTIONS,PATCH,DELETE,POST,PUT');
   res.setHeader('Access-Control-Allow-Headers', 'X-CSRF-Token, X-Requested-With, Accept, Accept-Version, Content-Length, Content-MD5, Content-Type, Date, X-Api-Version');
 
-  if (req.method === 'OPTIONS') {
-    res.status(200).end();
-    return;
-  }
+  if (req.method === 'OPTIONS') { res.status(200).end(); return; }
 
-  // --- PARAMETRI ---
-  const { domanda, dati } = req.body;
+  const { domanda, dati, systemPrompt } = req.body;  // ← aggiunto systemPrompt
   const API_KEY = process.env.GEMINI_API_KEY;
 
   if (!API_KEY) {
@@ -21,11 +16,16 @@ export default async function handler(req, res) {
   }
 
   const inputUtente = domanda || 'Ciao';
-  let promptFinale = inputUtente;
 
-  if (dati && (dati.archivio || dati.gruppi)) {
-    promptFinale = `Dati Congregazione: ${JSON.stringify(dati)}. Domanda: ${inputUtente}`;
+  // Costruisce il prompt finale combinando system + dati + domanda
+  let promptFinale = '';
+  if (systemPrompt) {
+    promptFinale += systemPrompt + '\n\n';
   }
+  if (dati && Object.keys(dati).length > 0) {
+    promptFinale += `Dati: ${JSON.stringify(dati)}\n\n`;
+  }
+  promptFinale += `Domanda: ${inputUtente}`;
 
   try {
     const response = await fetch(
@@ -39,7 +39,6 @@ export default async function handler(req, res) {
       }
     );
 
-    // Leggi sempre come testo prima, per evitare crash se Gemini risponde con HTML
     const rawText = await response.text();
 
     if (!response.ok) {
@@ -47,18 +46,14 @@ export default async function handler(req, res) {
       try {
         const errJson = JSON.parse(rawText);
         errMsg += ` - ${errJson.error?.message || rawText}`;
-      } catch (_) {
-        errMsg += ` - ${rawText.substring(0, 200)}`;
-      }
+      } catch (_) { errMsg += ` - ${rawText.substring(0, 200)}`; }
       res.status(500).json({ risposta: `❌ ${errMsg}` });
       return;
     }
 
     const result = JSON.parse(rawText);
-
-    if (result.candidates && result.candidates[0]?.content?.parts?.[0]?.text) {
-      const testo = result.candidates[0].content.parts[0].text;
-      res.status(200).json({ risposta: testo });
+    if (result.candidates?.[0]?.content?.parts?.[0]?.text) {
+      res.status(200).json({ risposta: result.candidates[0].content.parts[0].text });
     } else {
       res.status(500).json({ risposta: '❌ Risposta Gemini vuota o in formato inatteso.' });
     }
